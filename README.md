@@ -19,8 +19,8 @@ A production-quality weather dashboard built with Next.js (App Router), Bun, Typ
 cd weather-dashboard
 
 # Copy environment file and add your API key
-cp .env.example .env.local
-# Edit .env.local and add your OpenWeatherMap API key
+cp .env.example .env
+# Edit .env and add your OpenWeatherMap API key
 
 # Install dependencies and start
 bun install && bun run dev
@@ -30,9 +30,9 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `OPENWEATHER_API_KEY` | Your OpenWeatherMap API key | Yes |
+| Variable              | Description                 | Required |
+| --------------------- | --------------------------- | -------- |
+| `OPENWEATHER_API_KEY` | Your OpenWeatherMap API key | Yes      |
 
 Get a free API key at [OpenWeatherMap](https://openweathermap.org/api).
 
@@ -140,11 +140,11 @@ directly in a browser for a file-by-file, line-by-line breakdown) and a
 
 ## Responsive Breakpoints
 
-| Breakpoint | Width | Layout Adjustments |
-|------------|-------|-------------------|
-| Mobile | ≤480px | Stacked layout, horizontal scroll forecast |
-| Tablet | ~768px | 2-column grid, larger touch targets |
-| Desktop | ≥1280px | Full layout, 5-column forecast grid |
+| Breakpoint | Width   | Layout Adjustments                         |
+| ---------- | ------- | ------------------------------------------ |
+| Mobile     | ≤480px  | Stacked layout, horizontal scroll forecast |
+| Tablet     | ~768px  | 2-column grid, larger touch targets        |
+| Desktop    | ≥1280px | Full layout, 5-column forecast grid        |
 
 All touch targets are at least 44px for accessibility.
 
