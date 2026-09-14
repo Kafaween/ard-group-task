@@ -1,8 +1,18 @@
 @import "tailwindcss";
 
+/* Tailwind v4 class-based dark mode: toggling `.dark` on <html> (see
+   src/lib/theme.ts) enables `dark:` variants, instead of only following
+   the OS-level prefers-color-scheme. */
+@custom-variant dark (&:is(.dark *));
+
 :root {
   --background: #0a3d84;
   --foreground: #f8fafc;
+}
+
+.dark {
+  --background: #020617;
+  --foreground: #f1f5f9;
 }
 
 @theme inline {
