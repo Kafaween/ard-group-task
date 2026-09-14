@@ -162,53 +162,45 @@ function mapUpstreamError(status: number, city: string): WeatherApiError {
   );
 }
 
-// Fetch weather data from OpenWeatherMap
-export async function fetchWeatherData(city: string): Promise<WeatherData> {
-  const apiKey = process.env.OPENWEATHER_API_KEY;
+interface WeatherQuery {
+  // The "q=London" or "lat=1&lon=2" portion of the OpenWeatherMap URL.
+  params: string;
+  // The city name to check/populate in the cache, or null when it isn't
+  // known upfront (coordinate lookups only learn the city from the response).
+  cacheKey: string | null;
+}
 
-  if (!apiKey) {
-    throw new WeatherApiError(
-      "Weather API key is not configured",
-      "MISSING_API_KEY",
-      500
-    );
-  }
-
-  const normalizedCity = city.trim();
-  if (!normalizedCity) {
-    throw new WeatherApiError(
-      "City name cannot be empty",
-      "INVALID_CITY",
-      400
-    );
-  }
-
-  // Check cache first
-  const cached = weatherCache.get<WeatherData>(normalizedCity);
-  if (cached) {
-    return cached;
+async function fetchWeatherByQuery(
+  apiKey: string,
+  query: WeatherQuery
+): Promise<WeatherData> {
+  if (query.cacheKey) {
+    const cached = weatherCache.get<WeatherData>(query.cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
 
   try {
     // Fetch current weather and forecast in parallel
     const [currentResponse, forecastResponse] = await Promise.all([
       fetch(
-        `${OPENWEATHER_BASE_URL}/weather?q=${encodeURIComponent(normalizedCity)}&units=metric&appid=${apiKey}`,
+        `${OPENWEATHER_BASE_URL}/weather?${query.params}&units=metric&appid=${apiKey}`,
         { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
       ),
       fetch(
-        `${OPENWEATHER_BASE_URL}/forecast?q=${encodeURIComponent(normalizedCity)}&units=metric&appid=${apiKey}`,
+        `${OPENWEATHER_BASE_URL}/forecast?${query.params}&units=metric&appid=${apiKey}`,
         { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
       ),
     ]);
 
     // Handle errors
     if (!currentResponse.ok) {
-      throw mapUpstreamError(currentResponse.status, normalizedCity);
+      throw mapUpstreamError(currentResponse.status, query.cacheKey ?? "");
     }
 
     if (!forecastResponse.ok) {
-      throw mapUpstreamError(forecastResponse.status, normalizedCity);
+      throw mapUpstreamError(forecastResponse.status, query.cacheKey ?? "");
     }
 
     const currentData =
@@ -221,8 +213,9 @@ export async function fetchWeatherData(city: string): Promise<WeatherData> {
       forecast: transformForecast(forecastData),
     };
 
-    // Cache the result
-    weatherCache.set(normalizedCity, weatherData);
+    // Cache under the resolved city name — this also benefits a coordinate
+    // lookup's city if it's searched by name afterward.
+    weatherCache.set(weatherData.current.city, weatherData);
 
     return weatherData;
   } catch (error) {
@@ -249,6 +242,63 @@ export async function fetchWeatherData(city: string): Promise<WeatherData> {
       502
     );
   }
+}
+
+function requireApiKey(): string {
+  const apiKey = process.env.OPENWEATHER_API_KEY;
+  if (!apiKey) {
+    throw new WeatherApiError(
+      "Weather API key is not configured",
+      "MISSING_API_KEY",
+      500
+    );
+  }
+  return apiKey;
+}
+
+// Fetch weather data from OpenWeatherMap by city name
+export async function fetchWeatherData(city: string): Promise<WeatherData> {
+  const apiKey = requireApiKey();
+
+  const normalizedCity = city.trim();
+  if (!normalizedCity) {
+    throw new WeatherApiError(
+      "City name cannot be empty",
+      "INVALID_CITY",
+      400
+    );
+  }
+
+  return fetchWeatherByQuery(apiKey, {
+    params: `q=${encodeURIComponent(normalizedCity)}`,
+    cacheKey: normalizedCity,
+  });
+}
+
+// Fetch weather data from OpenWeatherMap by geographic coordinates (used for
+// the "detect my location" feature)
+export async function fetchWeatherByCoords(
+  lat: number,
+  lon: number
+): Promise<WeatherData> {
+  const apiKey = requireApiKey();
+
+  const isValid =
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180;
+
+  if (!isValid) {
+    throw new WeatherApiError("Invalid coordinates", "INVALID_CITY", 400);
+  }
+
+  return fetchWeatherByQuery(apiKey, {
+    params: `lat=${lat}&lon=${lon}`,
+    cacheKey: null,
+  });
 }
 
 // Check if weather data is cached

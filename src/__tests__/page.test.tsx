@@ -45,13 +45,25 @@ async function searchFor(user: ReturnType<typeof userEvent.setup>, city: string)
 
 describe("Home page", () => {
   let originalFetch: typeof global.fetch;
+  const originalGeolocation = navigator.geolocation;
 
   beforeEach(() => {
     originalFetch = global.fetch;
+    window.localStorage.clear();
+    // Most tests aren't about geolocation — keep it unsupported by default
+    // so the auto-detect effect is a no-op unless a test opts in.
+    Object.defineProperty(navigator, "geolocation", {
+      value: undefined,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    Object.defineProperty(navigator, "geolocation", {
+      value: originalGeolocation,
+      configurable: true,
+    });
   });
 
   it("shows the initial empty state before any search", () => {
@@ -161,5 +173,157 @@ describe("Home page", () => {
       expect(screen.getByText("London, GB")).toBeInTheDocument();
     });
     expect(weatherCallCount).toBe(2);
+  });
+
+  describe("geolocation auto-detect on first visit", () => {
+    function stubGeolocation(
+      onRequest: (
+        success: PositionCallback,
+        error: PositionErrorCallback
+      ) => void
+    ) {
+      Object.defineProperty(navigator, "geolocation", {
+        value: { getCurrentPosition: onRequest },
+        configurable: true,
+      });
+    }
+
+    it("shows local weather automatically when the browser grants location", async () => {
+      stubGeolocation((success) => {
+        success({
+          coords: { latitude: 51.5074, longitude: -0.1278 },
+        } as GeolocationPosition);
+      });
+
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/weather")) {
+          expect(url).toContain("lat=51.5074");
+          expect(url).toContain("lon=-0.1278");
+          return Promise.resolve(
+            jsonResponse({ success: true, data: weatherData, cached: false })
+          );
+        }
+        return Promise.resolve(jsonResponse({ success: true, data: [] }));
+      });
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(screen.getByText("London, GB")).toBeInTheDocument();
+      });
+    });
+
+    it("silently falls back to the initial state when permission is denied", async () => {
+      stubGeolocation((_success, error) => {
+        error({ code: 1, message: "denied" } as GeolocationPositionError);
+      });
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ success: true, data: [] }));
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            "Search for a city to see current weather conditions and a 5-day forecast"
+          )
+        ).toBeInTheDocument();
+      });
+      // No error banner should appear for a declined/failed auto-detect.
+      expect(screen.queryByText("City Not Found")).not.toBeInTheDocument();
+    });
+
+    it("silently falls back to the initial state when the fetch itself fails after permission is granted", async () => {
+      stubGeolocation((success) => {
+        success({
+          coords: { latitude: 51.5074, longitude: -0.1278 },
+        } as GeolocationPosition);
+      });
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/weather")) {
+          return Promise.reject(new Error("network down"));
+        }
+        return Promise.resolve(jsonResponse({ success: true, data: [] }));
+      });
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            "Search for a city to see current weather conditions and a 5-day forecast"
+          )
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Connection Error")).not.toBeInTheDocument();
+    });
+
+    it("silently falls back to the initial state when the API can't resolve the coordinates", async () => {
+      stubGeolocation((success) => {
+        success({
+          coords: { latitude: 0, longitude: 0 },
+        } as GeolocationPosition);
+      });
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/weather")) {
+          return Promise.resolve(
+            jsonResponse({
+              success: false,
+              error: "City not found",
+              code: "INVALID_CITY",
+            })
+          );
+        }
+        return Promise.resolve(jsonResponse({ success: true, data: [] }));
+      });
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            "Search for a city to see current weather conditions and a 5-day forecast"
+          )
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText("City Not Found")).not.toBeInTheDocument();
+    });
+
+    it("does not prompt again on a later visit", async () => {
+      window.localStorage.setItem("weather-dashboard-geo-attempted", "true");
+      const getCurrentPosition = vi.fn();
+      stubGeolocation(getCurrentPosition);
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ success: true, data: [] }));
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("Search for a city to get current weather and forecast")
+        ).toBeInTheDocument();
+      });
+      expect(getCurrentPosition).not.toHaveBeenCalled();
+    });
+
+    it("does nothing when geolocation isn't supported by the browser", () => {
+      Object.defineProperty(navigator, "geolocation", {
+        value: undefined,
+        configurable: true,
+      });
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ success: true, data: [] }));
+
+      render(<Home />);
+
+      expect(
+        screen.getByText(
+          "Search for a city to see current weather conditions and a 5-day forecast"
+        )
+      ).toBeInTheDocument();
+    });
   });
 });

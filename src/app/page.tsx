@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   SearchBar,
   CurrentWeather,
@@ -10,6 +10,12 @@ import {
   ErrorMessage,
   ThemeToggle,
 } from "@/components";
+import {
+  getCurrentPosition,
+  hasAttemptedGeolocation,
+  isGeolocationSupported,
+  markGeolocationAttempted,
+} from "@/lib/geolocation";
 import type {
   WeatherData,
   WeatherApiResponse,
@@ -58,6 +64,55 @@ export default function Home() {
       setIsLoading(false);
     }
   }, []);
+
+  const fetchWeatherByLocation = useCallback(
+    async (latitude: number, longitude: number) => {
+      setIsLoading(true);
+
+      try {
+        const response = await fetch(
+          `/api/weather?lat=${latitude}&lon=${longitude}`
+        );
+        const data: WeatherApiResponse = await response.json();
+
+        // This is a background convenience, not a user-initiated search —
+        // fail silently on error instead of showing an error state.
+        if (data.success) {
+          setWeatherData(data.data);
+          setLastSearchedCity(data.data.current.city);
+        }
+      } catch (err) {
+        console.error("Failed to fetch weather by location:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
+  );
+
+  // On first visit, try to auto-detect the user's location and show local
+  // weather. Only ever attempted once (tracked in localStorage) so we don't
+  // re-prompt for permission on every return visit.
+  useEffect(() => {
+    if (!isGeolocationSupported() || hasAttemptedGeolocation()) {
+      return;
+    }
+
+    // Kicking off the browser's geolocation permission prompt is exactly
+    // the "synchronize with an external system" case Effects exist for —
+    // the loading state just reflects that async browser API call.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsLoading(true);
+    getCurrentPosition({ timeout: 8000 })
+      .then(({ latitude, longitude }) => {
+        markGeolocationAttempted();
+        return fetchWeatherByLocation(latitude, longitude);
+      })
+      .catch(() => {
+        markGeolocationAttempted();
+        setIsLoading(false);
+      });
+  }, [fetchWeatherByLocation]);
 
   const handleRetry = useCallback(() => {
     if (lastSearchedCity) {

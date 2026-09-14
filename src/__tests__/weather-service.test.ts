@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   fetchWeatherData,
+  fetchWeatherByCoords,
   isWeatherCached,
   WeatherApiError,
 } from "@/lib/weather-service";
@@ -225,6 +226,100 @@ describe("weather-service", () => {
       await expect(fetchWeatherData("London")).rejects.toMatchObject({
         code: "NETWORK_ERROR",
         statusCode: 504,
+      });
+    });
+  });
+
+  describe("fetchWeatherByCoords", () => {
+    it("rejects with a 400 INVALID_CITY error for out-of-range coordinates, bypassing fetch entirely", async () => {
+      global.fetch = vi.fn();
+
+      await expect(fetchWeatherByCoords(200, 0)).rejects.toMatchObject({
+        code: "INVALID_CITY",
+        statusCode: 400,
+      });
+      await expect(fetchWeatherByCoords(0, -200)).rejects.toMatchObject({
+        code: "INVALID_CITY",
+        statusCode: 400,
+      });
+      await expect(fetchWeatherByCoords(NaN, 0)).rejects.toMatchObject({
+        code: "INVALID_CITY",
+        statusCode: 400,
+      });
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it("rejects with a 500 MISSING_API_KEY error when no API key is configured", async () => {
+      delete process.env.OPENWEATHER_API_KEY;
+
+      await expect(fetchWeatherByCoords(51.5, -0.12)).rejects.toMatchObject({
+        code: "MISSING_API_KEY",
+        statusCode: 500,
+      });
+    });
+
+    it("fetches by lat/lon and caches the result under the resolved city name", async () => {
+      global.fetch = mockFetchByUrl({
+        weather: {
+          ok: true,
+          json: () => Promise.resolve(mockCurrentWeatherResponse),
+        },
+        forecast: {
+          ok: true,
+          json: () => Promise.resolve(mockForecastResponse),
+        },
+      });
+
+      const result = await fetchWeatherByCoords(51.5074, -0.1278);
+      expect(result.current.city).toBe("London");
+
+      const [[weatherUrl]] = (global.fetch as ReturnType<typeof vi.fn>).mock
+        .calls;
+      expect(weatherUrl).toContain("lat=51.5074");
+      expect(weatherUrl).toContain("lon=-0.1278");
+
+      // A subsequent name-based lookup for the resolved city should now hit
+      // the cache the coordinate lookup populated.
+      (global.fetch as ReturnType<typeof vi.fn>).mockClear();
+      const cached = await fetchWeatherData("London");
+      expect(cached).toEqual(result);
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it("maps an upstream 404 to a 404 INVALID_CITY error without a query (city isn't known yet)", async () => {
+      global.fetch = mockFetchByUrl({
+        weather: { ok: false, status: 404 },
+        forecast: { ok: true, json: () => Promise.resolve(mockForecastResponse) },
+      });
+
+      await expect(fetchWeatherByCoords(0, 0)).rejects.toMatchObject({
+        code: "INVALID_CITY",
+        statusCode: 404,
+        message: "City not found",
+      });
+    });
+
+    it("maps a generic network failure to a 502 NETWORK_ERROR", async () => {
+      global.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+      await expect(fetchWeatherByCoords(51.5, -0.12)).rejects.toMatchObject({
+        code: "NETWORK_ERROR",
+        statusCode: 502,
+      });
+    });
+
+    it("maps a forecast-only failure (current weather ok) the same way as a current-weather failure", async () => {
+      global.fetch = mockFetchByUrl({
+        weather: {
+          ok: true,
+          json: () => Promise.resolve(mockCurrentWeatherResponse),
+        },
+        forecast: { ok: false, status: 500 },
+      });
+
+      await expect(fetchWeatherByCoords(51.5, -0.12)).rejects.toMatchObject({
+        code: "API_ERROR",
+        statusCode: 502,
       });
     });
   });

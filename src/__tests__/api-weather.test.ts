@@ -220,6 +220,132 @@ describe("Weather API Route", () => {
     });
   });
 
+  describe("geolocation (lat/lon) requests", () => {
+    it("returns weather data for valid coordinates", async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/weather")) {
+          expect(url).toContain("lat=51.5074");
+          expect(url).toContain("lon=-0.1278");
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(mockCurrentWeatherResponse),
+          });
+        }
+        if (url.includes("/forecast")) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(mockForecastResponse),
+          });
+        }
+        return Promise.reject(new Error("Unknown endpoint"));
+      });
+
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?lat=51.5074&lon=-0.1278"
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.success).toBe(true);
+      expect(data.data.current.city).toBe("London");
+      expect(data.cached).toBe(false);
+    });
+
+    it("takes the lat/lon path over city when both are provided", async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/weather")) {
+          expect(url).not.toContain("q=");
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(mockCurrentWeatherResponse),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockForecastResponse),
+        });
+      });
+
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?city=SomewhereElse&lat=51.5074&lon=-0.1278"
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.data.current.city).toBe("London");
+    });
+
+    it("returns 400 for non-numeric coordinates", async () => {
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?lat=abc&lon=xyz"
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("INVALID_CITY");
+      expect(data.error).toBe("Invalid coordinates");
+    });
+
+    it("returns 400 for out-of-range coordinates", async () => {
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?lat=999&lon=0"
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("INVALID_CITY");
+    });
+
+    it("saves the resolved city to recent searches", async () => {
+      const addSearch = vi.fn();
+      (getDatabase as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        addSearch,
+        getRecentSearches: vi.fn(() => []),
+        searchCities: vi.fn(() => []),
+      });
+
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/weather")) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(mockCurrentWeatherResponse),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockForecastResponse),
+        });
+      });
+
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?lat=51.5074&lon=-0.1278"
+      );
+      await GET(request);
+
+      expect(addSearch).toHaveBeenCalledWith("London");
+    });
+
+    it("returns 404 when the upstream can't resolve the coordinates", async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404 });
+
+      const request = new NextRequest(
+        "http://localhost:3000/api/weather?lat=0&lon=0"
+      );
+      const response = await GET(request);
+      const data = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(data.success).toBe(false);
+      expect(data.code).toBe("INVALID_CITY");
+    });
+  });
+
   describe("error handling", () => {
     it("should return 400 for missing city parameter", async () => {
       const request = new NextRequest("http://localhost:3000/api/weather");
